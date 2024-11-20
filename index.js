@@ -8,7 +8,7 @@ const User = require("./models/user");
 const Program = require("./models/program");
 
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const authorization_v2 = require("./middlewares/Authmiddleware");
