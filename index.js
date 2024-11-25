@@ -133,7 +133,7 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
 // Then return the URL while insert the URL to the database
 app.post("/upload-image", authorization_v2, async (req, res) => {
   const merchantId = req.merchantId;
-  const { image } = req.body;
+  const { image, prog_id } = req.body;
   let imageURL = "";
   console.log("The ID now is : ", merchantId);
 
@@ -169,7 +169,7 @@ app.post("/upload-image", authorization_v2, async (req, res) => {
     const result = await db
       .collection("programs")
       .updateOne(
-        { merchant_id: new ObjectId(merchantId) },
+        { _id: new ObjectId(prog_id) },
         { $push: { program_image: imageURL } }
       );
 
@@ -234,9 +234,13 @@ async function checkVacancyTimeslot(targetSessionTimeslot, sessions_id_array) {
     // console.log("sessions_id_result", sessions_id_result);
 
     // payments_result === all payment records in timeslot === no. of participants in timeslot
+    // 20241123 wilson
     const payments_result = await db
       .collection("payments")
-      .find({ session_id: { $in: sessions_id_result } })
+      .find({
+        session_id: { $in: sessions_id_result },
+        payment_status: "Completed",
+      })
       .toArray();
     // console.log("payments_result", payments_result);
     // numberOfparticipant === current enrolled participants (before new participant)
@@ -286,9 +290,10 @@ async function checkVacancyParticipant(
   targetSessionId
 ) {
   try {
+    // 20241123 wilson
     const payments_result = await db
       .collection("payments")
-      .find({ session_id: targetSessionId })
+      .find({ session_id: targetSessionId, payment_status: "Completed" })
       .toArray();
     // console.log("payments_result", payments_result);
     // numberOfparticipant === current enrolled participants (before new participant)
@@ -327,7 +332,7 @@ async function checkVacancyParticipant(
   }
 }
 
-// merchant creates participant
+// participant enroll program session/ merchant creates participant / merchant add session for participant
 // endpoint: /frontend/app/(private)/dashboard/participant/page.js
 async function checkSession(enrolledSessionId, sessions_id_array) {
   // check session type first
@@ -404,7 +409,6 @@ async function checkSession(enrolledSessionId, sessions_id_array) {
 // endpoint: /frontend/app/(private)/dashboard/participant/page.js
 async function getPaymentAmount(sessionId, participantId) {
   try {
-    console.log("getPaymentAmount");
     const sessions_of_merchant_array = await db
       .collection("programs_sessions")
       .find({
@@ -431,7 +435,7 @@ async function getPaymentAmount(sessionId, participantId) {
 
     const insertPayment = await db.collection("payments").insertOne({
       amount,
-      payment_status: "pending",
+      payment_status: "Pending",
       // payment_date: new Date(), should be added when payment status changed to paid
       payment_method: "Created by merchant",
       createdAt: new Date(),
@@ -475,10 +479,11 @@ app.post("/add-new-program", authorization_v2, async (req, res) => {
 
   try {
     // Save the program to the database
-    await newProgram.save();
+    const result = await newProgram.save();
     console.log("succeed to register new program!");
-    // console.log("The hashed password is: ", hashedPassword);
-    return res.status(201).json({ message: "Successful to create Program!" });
+    return res
+      .status(201)
+      .json({ message: "Successful to create Program!", program: result });
   } catch (err) {
     console.error(err);
     return res.status(201).json({ message: "Fail to create Program!" });
@@ -543,20 +548,27 @@ app.post("/add-new-participant-non-merchant", async (req, res) => {
     });
 
     const results = await Promise.all(checks);
-    console.log("results", results);
+    // console.log("results", results);
     const invalidResults = results.filter(
       (result) => result.status !== "valid"
     );
-    console.log("invalidResults", invalidResults);
+    // console.log("invalidResults", invalidResults);
 
     if (invalidResults.length > 0) {
-      const invalidIds = invalidResults.map((result) => result.id);
       const messages = invalidResults.map((result) => {
+        const idString = result.id.toString();
         return result.status === "invalid"
-          ? `Session ID ${result.id} is invalid`
-          : `Session ID ${result.id} is full`;
+          ? `Session ID ${idString} is invalid`
+          : `Session ID ${idString} is full`;
       });
-      return res.status(400).send(`${messages.join(", ")}`);
+
+      return res.status(400).json({
+        message: messages.join(", "),
+        invalidResults: invalidResults.map((result) => ({
+          id: result.id.toString(),
+          status: result.status,
+        })),
+      });
     }
 
     if (invalidResults.length === 0 && results[0].status === "valid") {
@@ -651,13 +663,20 @@ app.post("/add-new-participant", authorization_v2, async (req, res) => {
     console.log("invalidResults", invalidResults);
 
     if (invalidResults.length > 0) {
-      const invalidIds = invalidResults.map((result) => result.id);
       const messages = invalidResults.map((result) => {
+        const idString = result.id.toString();
         return result.status === "invalid"
-          ? `Session ID ${result.id} is invalid`
-          : `Session ID ${result.id} is full`;
+          ? `Session ID ${idString} is invalid`
+          : `Session ID ${idString} is full`;
       });
-      return res.status(400).send(`${messages.join(", ")}`);
+
+      return res.status(400).json({
+        message: messages.join(", "),
+        invalidResults: invalidResults.map((result) => ({
+          id: result.id.toString(),
+          status: result.status,
+        })),
+      });
     }
 
     if (invalidResults.length === 0 && results[0].status === "valid") {
@@ -856,20 +875,29 @@ app.post("/register", async (req, res) => {
     organization,
     password,
   } = req.body;
-  console.log(req.body);
-  const existingEmail = await User.findOne({ merchant_email });
-  if (existingEmail) {
-    return res.status(409).json({ error: "Email is already in use" });
-  }
+
+  const errors = [];
 
   // Check if the merchant_username is already in used. If yes, return to the frontend and page
   try {
     const existingUser = await User.findOne({ merchant_username });
     if (existingUser) {
-      return res.status(409).json({ error: "此用戶名已使用，請使用另一名稱" });
+      // return res.status(409).json({ error: "此用戶名已使用，請使用另一名稱" });
+      errors.push("Duplicated username. Please choose a different username");
     }
   } catch (err) {
     console.error("Error while checking username:", err);
+  }
+
+  // Check if the email address is already in used. If yes, return to the frontend and page
+  const existingEmail = await User.findOne({ merchant_email });
+  if (existingEmail) {
+    // return res.status(409).json({ error: "Email is already in use" });
+    errors.push("Duplicated email. Please provide a different email address");
+  }
+
+  if (errors.length > 0) {
+    return res.status(409).json({ errors });
   }
 
   const newUser = new User({
@@ -919,7 +947,7 @@ app.post("/login", async (req, res) => {
       const payload = {
         merchant_id: user.id,
         merchant_username: user.merchant_username,
-        merchant_email: user.merchant_email,
+        // merchant_email: user.merchant_email,
       };
       const token = jwt.sign({ payload }, process.env.JWT_SECRET, {
         expiresIn: "7d",
@@ -974,9 +1002,18 @@ app.get("/programs-sessions/:programId", async (req, res) => {
       .toArray();
     console.log("succeed to get program-session");
 
-    result.length === 0
-      ? res.send(`Program Id ${programId} is not found in program`)
-      : res.send(result);
+    // 20241122 updated by Wilson starts
+    if (result.length === 0) {
+      return res.send(`Program Id ${programId} is not found in program`);
+    }
+
+    const filterInactiveSession = result.filter(
+      (res) => !res.active === false || res.active === undefined
+    );
+    // console.log("filterInactiveSession", filterInactiveSession);
+    // res.json(result);
+    res.json(filterInactiveSession);
+    // 20241122 updated by Wilson ends
   } catch (err) {
     console.log(err);
     res.send("failed to get program-session");
@@ -1168,7 +1205,7 @@ async function getPaymentNumber(sessionId) {
   try {
     const payments_result = await db
       .collection("payments")
-      .find({ session_id: sessionId })
+      .find({ session_id: sessionId, payment_status: "Completed" })
       .project({ _id: 1 })
       .toArray();
     const payments_Id_array = payments_result.map((payment) => payment._id);
@@ -1205,7 +1242,12 @@ app.get("/get-session-info/:programId", async (req, res) => {
       };
     });
     const result = await Promise.all(sessionsWithPaymentInfo);
-    res.json(result);
+    const filterInactiveSession = result.filter(
+      (res) => !res.active === false || res.active === undefined
+    ); // 20241122 updated by Wilson
+    // console.log("filterInactiveSession", filterInactiveSession); // 20241122 updated by Wilson
+    // res.json(result);
+    res.json(filterInactiveSession); // 20241122 updated by Wilson
   } catch (err) {
     res.send("failed to get fetch payment info with session id");
   }
@@ -1254,28 +1296,59 @@ app.post("/update-program-info", async (req, res) => {
   }
 });
 
+// 20241122 updated by Wilson
 // endpoint: /frontend/app/(private)/dashboard/program/[id]/page.js
 app.post("/update-session-info", async (req, res) => {
   const { sessionsInfo } = req.body;
-  console.log("sessionsInfo", sessionsInfo);
-  const {
-    _id,
-    session_dates,
-    vacancy_participant,
-    vacancy_timeslot,
-    session_notice,
-    teacher,
-    session_type,
-  } = sessionsInfo;
-  // data validation
-  try {
-    // udpate Session info itself
 
-    // update Session with same session dates & session type in timeslot
-    res.send("hi");
-  } catch (err) {
-    console.log(err);
-    res.send("bye");
+  const sessionsInfo_converted = sessionsInfo.map((session) => {
+    // 直接處理 session.session_dates 數組
+    const session_dates_converted = session.session_dates.map((dateStr) => {
+      const date = new Date(dateStr);
+      console.log("date", date);
+      if (isNaN(date.getTime())) {
+        throw new Error(`Invalid date format: ${dateStr}`);
+      }
+      return date;
+      // 將本地時間（UTC+8）轉換為 UTC-8
+      // const utcMinus8Date = new Date(date.getTime() - 8 * 60 * 60 * 1000); // 減去8小時
+      // return utcMinus8Date;
+    });
+
+    return {
+      ...session,
+      session_dates: session_dates_converted,
+    };
+  });
+
+  try {
+    const bulkOperations = sessionsInfo_converted.map((session) => ({
+      updateOne: {
+        filter: { _id: new ObjectId(session._id) },
+        update: {
+          $set: {
+            session_dates: session.session_dates,
+            vacancy_participant: session.vacancy_participant || 0,
+            vacancy_timeslot: session.vacancy_timeslot || 0,
+            session_notice: session.session_notice,
+            teacher: session.teacher,
+            session_type: session.session_type,
+          },
+        },
+      },
+    }));
+
+    const result = await db
+      .collection("programs_sessions")
+      .bulkWrite(bulkOperations);
+
+    return res.status(200).json({
+      message: "Sessions updated successfully",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("Error updating sessions:", error);
+    return res.status(400).json({ message: "Failed to update sessions" });
   }
 });
 
@@ -1306,6 +1379,36 @@ app.post("/create-session-info", async (req, res) => {
   } catch (err) {
     console.log(err);
     res.send("Create session failed");
+  }
+});
+
+// endpoint: frontend\app/(private)/dashboard/program/[id]/page.js
+app.delete("/delete-turn-session-to-inactive", async (req, res) => {
+  const { _id } = req.body;
+  console.log("_id", _id);
+  try {
+    const result = await db
+      .collection("programs_sessions")
+      .updateOne({ _id: new ObjectId(_id) }, { $set: { active: false } });
+
+    if (result.modifiedCount === 0) {
+      console.log("Session not found or already inactive");
+
+      return res.status(404).json({
+        message: "Session not found or already inactive",
+      });
+    }
+
+    console.log("Session successfully marked as inactive");
+    return res.status(200).json({
+      message: "Session successfully marked as inactive",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (err) {
+    console.error("Delete session error:", err);
+    return res.status(500).json({
+      message: "Failed to update session status",
+    });
   }
 });
 
@@ -1347,6 +1450,268 @@ app.post("/update-participant-info", authorization_v2, async (req, res) => {
   }
 });
 
+// endpoint: /frontend/app/(private)/dashboard/participant/[id]/page.js
+app.post(
+  "/update-participant-info-session",
+  authorization_v2,
+  async (req, res) => {
+    const { participantId, sessionIds } = req.body;
+    const { merchantId } = req;
+    console.log("participantId", participantId);
+    console.log("merchantId", merchantId);
+    console.log("sessionIds", sessionIds);
+
+    // Convert to ObjectId array
+    const enrolled_session_id_ObjectIdArray = sessionIds.map(
+      (id) => new ObjectId(id)
+    );
+
+    try {
+      // Validate sessions
+      const checks = enrolled_session_id_ObjectIdArray.map(async (id) => {
+        const sessions_id_array = await getSessionByMerchant(merchantId);
+        const isValidSession = sessions_id_array.some((sessionId) =>
+          sessionId.equals(id)
+        );
+        if (!isValidSession) {
+          return { id, status: "invalid" };
+        }
+        return await checkSession(id, sessions_id_array);
+      });
+
+      const results = await Promise.all(checks);
+      console.log("results", results);
+      const invalidResults = results.filter(
+        (result) => result.status !== "valid"
+      );
+      console.log("invalidResults", invalidResults);
+
+      if (invalidResults.length > 0) {
+        const messages = invalidResults.map((result) => {
+          const idString = result.id.toString();
+          return result.status === "invalid"
+            ? `Session ID ${idString} is invalid`
+            : `Session ID ${idString} is full`;
+        });
+
+        return res.status(400).json({
+          message: messages.join(", "),
+          invalidResults: invalidResults.map((result) => ({
+            id: result.id.toString(),
+            status: result.status,
+          })),
+        });
+      }
+
+      if (invalidResults.length === 0 && results[0].status === "valid") {
+        const updateResult = await db.collection("participants").updateOne(
+          { _id: new ObjectId(participantId) },
+          {
+            $addToSet: {
+              enrolled_session_id: {
+                $each: enrolled_session_id_ObjectIdArray,
+              },
+            },
+          }
+        );
+        console.log(
+          "merchant side added session for participant",
+          updateResult
+        );
+        if (updateResult.modifiedCount === 0) {
+          return res.status(400).json({
+            message:
+              "One of the session id was enrolled previously, please check",
+            modifiedCount: updateResult.modifiedCount,
+          });
+        }
+
+        const payments = enrolled_session_id_ObjectIdArray.map(
+          async (sessionId) => {
+            return await getPaymentAmount(
+              sessionId,
+              new ObjectId(participantId)
+            );
+          }
+        );
+        const addPayments = await Promise.all(payments);
+
+        return res.status(200).json({
+          message: "Added session successfully",
+          modifiedCount: updateResult.modifiedCount,
+          paymentId: addPayments,
+        });
+      }
+      // Use $addToSet to add unique session IDs to the array
+    } catch (err) {
+      console.log(err);
+      res.status(400).json({ message: err.message });
+    }
+  }
+);
+
+app.delete("/delete-participant-enrolled-session", async (req, res) => {
+  const { participantId, sessionId } = req.body;
+  console.log("participantId", participantId);
+  console.log("sessionId", sessionId);
+  try {
+    const participantResult = await db.collection("participants").updateOne(
+      {
+        _id: new ObjectId(participantId),
+      },
+      {
+        $pull: { enrolled_session_id: new ObjectId(sessionId) },
+      }
+    );
+    console.log("participantResult", participantResult);
+    const paymentResult = await db.collection("payments").updateOne(
+      {
+        session_id: new ObjectId(sessionId),
+        participant_id: new ObjectId(participantId),
+      },
+      {
+        $set: { payment_status: "Cancelled" },
+      }
+    );
+
+    console.log("paymentResult", paymentResult);
+    return res.status(200).json({
+      message: "Successfully Deleted",
+      participantModified: participantResult.modifiedCount,
+      paymentModified: paymentResult.modifiedCount,
+    });
+  } catch (err) {
+    console.log("err", err);
+    return res.status(400).json({
+      message: "Failed to update documents",
+      error: err.message,
+    });
+  }
+});
+
+// endpoint: /frontend/app/(private)/dashboard/page.js
+app.post("/get-calendar-data", authorization_v2, async (req, res) => {
+  const { merchantId } = req;
+  console.log("get-calendar-data merchant id", merchantId);
+  let sessionIdArray;
+  try {
+    // step1
+    sessionIdArray = await getSessionByMerchant(merchantId);
+  } catch (err) {
+    console.log("get session error", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to get session", error: err });
+  }
+  let paymentInfoArray;
+  try {
+    //step 2: get payment info
+    paymentInfoArray = await db
+      .collection("payments")
+      .find({
+        session_id: { $in: sessionIdArray },
+        payment_status: "Completed",
+      })
+      .toArray();
+    // console.log("paymentInfoArray", paymentInfoArray);
+  } catch (err) {
+    console.log("get payment error", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to get payment info", error: err });
+  }
+
+  //step 3: merge all stuff to payment and group payment by date
+  let addProgramIdToPayment;
+  try {
+    addProgramIdToPayment = paymentInfoArray.map(async (payment) => {
+      const { programId, programName, programType, lesson_duration } =
+        await getProgramName(payment.session_id);
+      return {
+        program_id: programId,
+        program_name_zh: programName,
+        program_type: programType,
+        lesson_duration,
+        session_id: payment.session_id,
+        session_dates: await getSessionDate(payment.session_id),
+      };
+    });
+
+    const groupedPaymentData = await Promise.all(addProgramIdToPayment);
+    // console.log("groupedPaymentData", groupedPaymentData);
+    const datesGroupedBySession = (
+      await Promise.all(addProgramIdToPayment)
+    ).reduce((acc, curr) => {
+      curr.session_dates.forEach((date) => {
+        let validDate;
+        let originalTime = ""; // 儲存原始時間
+
+        // 處理日期和時區轉換
+        if (typeof date === "string") {
+          // 保存原始的時間部分
+          originalTime = date.split("T")[1].split(".")[0]; // 提取 "16:00:00" 部分
+
+          // 創建一個 Date 對象並轉換為香港時區 (UTC+8)
+          validDate = new Date(date);
+          validDate = new Date(validDate.getTime() + 8 * 60 * 60 * 1000);
+        } else if (date instanceof Date && !isNaN(date.getTime())) {
+          originalTime = date.toISOString().split("T")[1].split(".")[0];
+          validDate = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+        } else {
+          console.warn("Invalid date encountered:", date);
+          return;
+        }
+
+        // 格式化日期為 YYYY-MM-DD，使用香港時間
+        const dateKey = validDate.toISOString().split("T")[0];
+
+        if (!acc[dateKey]) {
+          acc[dateKey] = {
+            date: dateKey,
+            sessions: {},
+            total_count: 0,
+          };
+        }
+
+        const sessionKey = curr.session_id;
+        if (!acc[dateKey].sessions[sessionKey]) {
+          // 轉換 UTC 時間到香港時間 (UTC+8)
+          const [hours, minutes] = originalTime.split(":");
+          const utcHours = parseInt(hours);
+          const hkHours = (utcHours + 8) % 24; // 轉換為香港時間
+          const session_startTime = `${hkHours
+            .toString()
+            .padStart(2, "0")}:${minutes}`; // 格式化為 "HH:MM"
+
+          acc[dateKey].sessions[sessionKey] = {
+            session_id: curr.session_id,
+            program_id: curr.program_id,
+            program_name: curr.program_name_zh,
+            program_type: curr.program_type,
+            lesson_duration: curr.lesson_duration,
+            session_startTime: session_startTime, // 添加開始時間
+            count: 0,
+          };
+        }
+
+        acc[dateKey].sessions[sessionKey].count += 1;
+        acc[dateKey].total_count += 1;
+      });
+
+      return acc;
+    }, {});
+
+    // 將結果轉換為所需格式
+
+    res.status(200).json(datesGroupedBySession);
+  } catch (err) {
+    console.log("get program error", err);
+    return res
+      .status(500)
+      .json({ message: "Internal Server Error", error: err });
+  }
+});
+
 // endpoint: /frontend/app/(private)/dashboard/page.js
 app.post("/get-revenue", authorization_v2, async (req, res) => {
   const { merchantId } = req;
@@ -1368,7 +1733,7 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
       .collection("payments")
       .find({
         session_id: { $in: sessionIdArray },
-        payment_status: "completed",
+        payment_status: "Completed",
       })
       .toArray();
     // console.log("paymentInfoArray", paymentInfoArray);
@@ -1398,27 +1763,72 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
     });
 
     const groupedPaymentData = await Promise.all(addProgramIdToPayment);
-    console.log("groupedPaymentData", groupedPaymentData);
+    // console.log("groupedPaymentData", groupedPaymentData);
     const datesGroupedBySession = (
       await Promise.all(addProgramIdToPayment)
     ).reduce((acc, curr) => {
       const amountPerDate = curr.amount / curr.session_dates.length; // 計算每個日期的金額
 
+      // curr.session_dates.forEach((date) => {
+      //   // 檢查日期的有效性
+      //   let validDate;
+
+      //   // 如果是字符串，則將其轉換為 Date 對象
+      //   if (typeof date === "string") {
+      //     validDate = new Date(date);
+      //   } else if (date instanceof Date && !isNaN(date.getTime())) {
+      //     validDate = date; // 有效的 Date 對象
+      //   } else {
+      //     console.warn("Invalid date encountered:", date);
+      //     return; // 跳過無效日期
+      //   }
+      //   console.log("date", date);
+      //   const dateKey = validDate.toISOString().split("T")[0]; // 使用有效的日期
+
+      //   if (!acc[dateKey]) {
+      //     acc[dateKey] = {
+      //       date: dateKey,
+      //       sessions: {},
+      //       total_count: 0,
+      //     };
+      //   }
+
+      //   const sessionKey = curr.session_id; // 僅用session_id作為鍵
+      //   if (!acc[dateKey].sessions[sessionKey]) {
+      //     acc[dateKey].sessions[sessionKey] = {
+      //       session_id: curr.session_id,
+      //       program_name: curr.program_name_zh,
+      //       program_type: curr.program_type,
+      //       total_amount: 0, // 用於累加金額
+      //       count: 0,
+      //     };
+      //   }
+
+      //   acc[dateKey].sessions[sessionKey].total_amount += amountPerDate; // 將金額加到對應的session
+      //   acc[dateKey].sessions[sessionKey].count += 1; // 計算每個session的次數
+      //   acc[dateKey].total_count += 1; // 每個日期的總計數
+      // });
       curr.session_dates.forEach((date) => {
-        // 檢查日期的有效性
+        // 检查日期的有效性
         let validDate;
 
-        // 如果是字符串，則將其轉換為 Date 對象
+        // 如果是字符串，则将其转换为 Date 对象
         if (typeof date === "string") {
           validDate = new Date(date);
         } else if (date instanceof Date && !isNaN(date.getTime())) {
-          validDate = date; // 有效的 Date 對象
+          validDate = date; // 有效的 Date 对象
         } else {
           console.warn("Invalid date encountered:", date);
-          return; // 跳過無效日期
+          return; // 跳过无效日期
         }
 
-        const dateKey = validDate.toISOString().split("T")[0]; // 使用有效的日期
+        // console.log("Original UTC date:", validDate.toISOString());
+
+        // 转换为香港时区的时间
+        const hkDate = new Date(validDate.getTime() + 8 * 60 * 60 * 1000); // 加 8 小时
+        // console.log("Converted HK date:", hkDate.toISOString());
+
+        const dateKey = hkDate.toISOString().split("T")[0]; // 使用香港时区的日期
 
         if (!acc[dateKey]) {
           acc[dateKey] = {
@@ -1428,25 +1838,24 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
           };
         }
 
-        const sessionKey = curr.session_id; // 僅用session_id作為鍵
+        const sessionKey = curr.session_id; // 仅用 session_id 作为键
         if (!acc[dateKey].sessions[sessionKey]) {
           acc[dateKey].sessions[sessionKey] = {
             session_id: curr.session_id,
             program_name: curr.program_name_zh,
             program_type: curr.program_type,
-            total_amount: 0, // 用於累加金額
+            total_amount: 0, // 用于累加金额
             count: 0,
           };
         }
 
-        acc[dateKey].sessions[sessionKey].total_amount += amountPerDate; // 將金額加到對應的session
-        acc[dateKey].sessions[sessionKey].count += 1; // 計算每個session的次數
-        acc[dateKey].total_count += 1; // 每個日期的總計數
+        acc[dateKey].sessions[sessionKey].total_amount += amountPerDate; // 将金额加到对应的 session
+        acc[dateKey].sessions[sessionKey].count += 1; // 计算每个 session 的次数
+        acc[dateKey].total_count += 1; // 每个日期的总计数
       });
 
       return acc;
     }, {});
-
     // 將結果轉換為所需格式
     const resultBySessionDate = Object.values(datesGroupedBySession).flatMap(
       (dateGroup) =>
@@ -1454,7 +1863,7 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
           date: dateGroup.date,
           session_id: session.session_id,
           program_name: session.program_name,
-          total_amount: session.total_amount, // 每個session的金額
+          total_amount: Math.floor(session.total_amount), // 每個session的金額
           total_count: session.count, // 此處的count指的是該session的次數
           program_type: session.program_type,
         }))
@@ -1463,7 +1872,7 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
     // 根據日期進行排序
     resultBySessionDate.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    console.log("resultBySessionDate", resultBySessionDate);
+    // console.log("resultBySessionDate", resultBySessionDate);
 
     // Group by date
     const groupedByDate = resultBySessionDate.reduce((acc, curr) => {
@@ -1485,7 +1894,7 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
 
     // 將結果轉換為數組格式
     const resultGroupedByDate = Object.values(groupedByDate);
-    console.log("resultGroupedByDate", resultGroupedByDate);
+    // console.log("resultGroupedByDate", resultGroupedByDate);
 
     const yearMonthAggregatedData = resultGroupedByDate.reduce(
       (acc, { date, total_amount, total_count }) => {
@@ -1501,7 +1910,7 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
       },
       {}
     );
-    console.log("yearMonthAggregatedData", yearMonthAggregatedData);
+    // console.log("yearMonthAggregatedData", yearMonthAggregatedData);
     const resultGroupedByYearMonthGeneric = Object.entries(
       yearMonthAggregatedData
     ).map(([yearMonth, { total_amount, total_count }]) => ({
@@ -1510,7 +1919,10 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
       total_count,
     }));
 
-    // console.log(resultGroupedByYearMonthGeneric);
+    // console.log(
+    //   "resultGroupedByYearMonthGeneric",
+    //   resultGroupedByYearMonthGeneric
+    // );
 
     // 在 yearMonthAggregatedData 之後，進行 program_name 和 program_type 的聚合
     const programAggregatedData = {};
@@ -1574,21 +1986,23 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
     const resultGroupedByYearMonth_programNames = Object.entries(
       programAggregatedData
     ).reduce((acc, [yearMonth, { program_names }]) => {
-      // 確保年份唯一
-      const existingEntry = acc.find((entry) => entry.year_month === yearMonth);
+      const existingEntry =
+        acc.find((entry) => entry.year_month === yearMonth) || {};
+      let total = 0;
 
-      if (existingEntry) {
-        // 如果已存在，合併programNames
-        Object.entries(program_names).forEach(([name, amount]) => {
-          existingEntry[name] = amount;
-        });
-      } else {
-        // 如果不存在，新增條目
-        const newEntry = { year_month: yearMonth };
-        Object.entries(program_names).forEach(([name, amount]) => {
-          newEntry[name] = amount;
-        });
-        acc.push(newEntry);
+      Object.entries(program_names).forEach(([name, amount]) => {
+        existingEntry[name] = amount; // 合併 program names
+        total += amount; // 計算總和
+      });
+
+      if (!existingEntry.year_month) {
+        existingEntry.year_month = yearMonth; // 設定 year_month
+      }
+
+      existingEntry.All_Programs = total; // 添加總和
+
+      if (!acc.includes(existingEntry)) {
+        acc.push(existingEntry); // 如果不存在，新增條目
       }
 
       return acc;
@@ -1597,35 +2011,91 @@ app.post("/get-revenue", authorization_v2, async (req, res) => {
     const resultGroupedByYearMonth_programTypes = Object.entries(
       programAggregatedData
     ).reduce((acc, [yearMonth, { program_types }]) => {
-      // 確保年份唯一
-      const existingEntry = acc.find((entry) => entry.year_month === yearMonth);
+      const existingEntry =
+        acc.find((entry) => entry.year_month === yearMonth) || {};
+      let total = 0;
 
-      if (existingEntry) {
-        // 如果已存在，合併programTypes
-        Object.entries(program_types).forEach(([type, amount]) => {
-          existingEntry[type] = amount;
-        });
-      } else {
-        // 如果不存在，新增條目
-        const newEntry = { year_month: yearMonth };
-        Object.entries(program_types).forEach(([type, amount]) => {
-          newEntry[type] = amount;
-        });
-        acc.push(newEntry);
+      Object.entries(program_types).forEach(([type, amount]) => {
+        existingEntry[type] = amount; // 合併 program types
+        total += amount; // 計算總和
+      });
+
+      if (!existingEntry.year_month) {
+        existingEntry.year_month = yearMonth; // 設定 year_month
+      }
+
+      existingEntry.All_Types = total; // 添加總和
+
+      if (!acc.includes(existingEntry)) {
+        acc.push(existingEntry); // 如果不存在，新增條目
       }
 
       return acc;
     }, []);
 
+    // 按 program_name 分組
+    const resultGroupedByYearMonth_programNames_participant =
+      resultBySessionDate.reduce((acc, curr) => {
+        const yearMonth = curr.date.slice(0, 7); // 提取年月
+        if (!acc[yearMonth]) acc[yearMonth] = { year_month: yearMonth };
+
+        const programName = curr.program_name;
+        acc[yearMonth][programName] =
+          (acc[yearMonth][programName] || 0) + curr.total_count;
+
+        return acc;
+      }, {});
+
+    // 格式化為陣列
+    const resultGroupedByYearMonth_programNames_participantArray =
+      Object.values(resultGroupedByYearMonth_programNames_participant);
+
+    // 按 program_type 分組
+    const resultGroupedByYearMonth_programTypes_participant =
+      resultBySessionDate.reduce((acc, curr) => {
+        const yearMonth = curr.date.slice(0, 7); // 提取年月
+        if (!acc[yearMonth]) acc[yearMonth] = { year_month: yearMonth };
+
+        const programType = curr.program_type;
+        acc[yearMonth][programType] =
+          (acc[yearMonth][programType] || 0) + curr.total_count;
+
+        return acc;
+      }, {});
+
+    // 格式化為陣列
+    const resultGroupedByYearMonth_programTypes_participantArray =
+      Object.values(resultGroupedByYearMonth_programTypes_participant);
+
+    // console.log(
+    //   "resultGroupedByYearMonth_programNames",
+    //   resultGroupedByYearMonth_programNames
+    // );
+    // console.log(
+    //   "resultGroupedByYearMonth_programTypes",
+    //   resultGroupedByYearMonth_programTypes
+    // );
+
+    // console.log(
+    //   "resultGroupedByYearMonth_programNames_participantArray",
+    //   resultGroupedByYearMonth_programNames_participantArray
+    // );
+    // console.log(
+    //   "resultGroupedByYearMonth_programTypes_participantArray",
+    //   resultGroupedByYearMonth_programTypes_participantArray
+    // );
+
     // 最終結果
     const revenueCombinedResult = {
       resultGroupedByYearMonth,
-      resultGroupedByYearMonthGeneric,
       resultGroupedByYearMonth_programNames,
       resultGroupedByYearMonth_programTypes,
+      resultGroupedByYearMonth_programNames_participantArray,
+      resultGroupedByYearMonth_programTypes_participantArray,
     };
-
+    // console.log("revenueCombinedResult", revenueCombinedResult);
     // 返回結果
+    // console.log("revenueCombinedResult", revenueCombinedResult);
     res.json(revenueCombinedResult);
   } catch (err) {
     console.log("get program error", err);
@@ -1686,6 +2156,7 @@ async function getProgramName(sessionId) {
         programName: program.program_name_zh,
         programType: program.program_type,
         programId: program._id,
+        lesson_duration: program.lesson_duration,
       };
     });
     return programInfo[0];
@@ -1851,6 +2322,25 @@ app.post("/update-payment-status", authorization_v2, async (req, res) => {
   }
 });
 
+// update the payment status
+// endpoint: /frontend/app/(private)/dashboard/payment/page.js
+app.post("/update-payment-status2", authorization_v2, async (req, res) => {
+  const { _id, payment_status } = req.body;
+
+  try {
+    const result = await db
+      .collection("payments")
+      .updateOne(
+        { _id: new ObjectId(_id) },
+        { $set: { payment_status: payment_status } }
+      );
+    console.log("reach here");
+    return res.status(200).json({ message: "Payment status is updated!!" });
+  } catch (err) {
+    return res.status(500).json({ message: "Database server error", error });
+  }
+});
+
 // purpose: participant return to payment page + generate invoice
 // endpoint: unknown
 app.post("/get-invoice-info", async (req, res) => {
@@ -1959,6 +2449,95 @@ app.post("/update-payment-details", authorization_v2, async (req, res) => {
     return res.status(200).json({ message: "Payment details updated" });
   } catch (error) {
     return res.status(400).json({ message: "Database Error" });
+  }
+});
+
+//payment change status from "pending" to "received" (endpoint: /payment/${payment_id})
+app.post("/api/update-payment-status", async (req, res) => {
+  try {
+    const { payment_id, status, payment_method } = req.body;
+
+    // Validate required fields
+    if (!payment_id || !status || !payment_method) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment ID, status, and payment method are required",
+      });
+    }
+
+    // Connect to payments collection
+    const db = client.db("information");
+    const payments = db.collection("payments");
+
+    console.log("Received payment_id:", payment_id);
+    console.log("Updating status to:", status);
+    console.log("Updating payment method to:", payment_method);
+
+    // Update payment status and method
+    const result = await payments.updateOne(
+      { _id: new ObjectId(payment_id) },
+      {
+        $set: {
+          payment_status: status,
+          payment_method: payment_method, // Update the payment method
+          updated_at: new Date(),
+        },
+      }
+    );
+
+    console.log("Matched Count:", result.matchedCount);
+    console.log("Modified Count:", result.modifiedCount);
+
+    // Check if payment was found and updated
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found",
+      });
+    }
+
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: "Payment status and method updated successfully",
+    });
+  } catch (error) {
+    console.error("Error updating payment status:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update payment status",
+      error: error.message,
+    });
+  }
+});
+
+app.post("/get-participant-by-session", async (req, res) => {
+  const { sessionId } = req.body;
+
+  try {
+    const payment_result = await db
+      .collection("payments")
+      .find({
+        session_id: new ObjectId(sessionId),
+        payment_status: "Completed",
+      })
+      .project({ participant_id: 1, session_id: 1, _id: 1 })
+      .toArray();
+
+    const participantIds = payment_result.map(
+      (payment) => payment.participant_id
+    );
+    // console.log("participantIds", participantIds);
+    const participant_result = await db
+      .collection("participants")
+      .find({ _id: { $in: participantIds } })
+      .project({ participant_name: 1, telephone_no: 1 })
+      .toArray();
+
+    res.status(200).json(participant_result);
+  } catch (err) {
+    console.log(err);
+    res.status(400).json(err);
   }
 });
 
