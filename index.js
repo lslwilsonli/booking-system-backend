@@ -697,13 +697,13 @@ app.post("/add-new-participant", authorization_v2, async (req, res) => {
       );
       const addPayments = await Promise.all(payments);
 
-      return res.send(
+      return res.json(
         "succeed to add new participant, collections: participants and payments are updated"
-      );
+      ); //20241125 update
     }
   } catch {
     // to-do: check any fields missing?
-    res.send("failed to add new participant");
+    res.json("failed to add new participant");
   }
 });
 
@@ -2280,6 +2280,9 @@ app.post("/get-payment-info", authorization_v2, async (req, res) => {
           payment.participant_id
         );
 
+        console.log("The DETAIL IS: ", participantDetails);
+        console.log("THE ID IS :", participantDetails.participant_name);
+
         return {
           ...payment,
           program_name_zh: (await getProgramName(payment.session_id))
@@ -2296,6 +2299,7 @@ app.post("/get-payment-info", authorization_v2, async (req, res) => {
       .status(500)
       .json({ message: "Error combining payment details." });
   }
+  console.log("Reach here backend4");
 
   // console.log(combinedPaymentDetail);
   return res.json(combinedPaymentDetail);
