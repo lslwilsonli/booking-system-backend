@@ -1004,7 +1004,10 @@ app.get("/programs-sessions/:programId", async (req, res) => {
 
     // 20241122 updated by Wilson starts
     if (result.length === 0) {
-      return res.send(`Program Id ${programId} is not found in program`);
+      // return res.send(`Program Id ${programId} is not found in program`);
+      return res.json({
+        message: `Program Id ${programId} is not found in program`,
+      });
     }
 
     const filterInactiveSession = result.filter(
@@ -1016,7 +1019,8 @@ app.get("/programs-sessions/:programId", async (req, res) => {
     // 20241122 updated by Wilson ends
   } catch (err) {
     console.log(err);
-    res.send("failed to get program-session");
+    // res.send("failed to get program-session");
+    res.json({ message: "failed to get program-session" });
   }
 });
 
@@ -1099,7 +1103,8 @@ app.post("/all-participants", authorization_v2, async (req, res) => {
     res.json(participants_result);
   } catch (err) {
     console.log(err);
-    res.send("failed");
+    // res.send("failed");
+    res.json({ message: "failed to fetch participan" });
   }
 });
 
@@ -1133,7 +1138,8 @@ app.post("/get-programId-by-sessionId", async (req, res) => {
     res.json(programDataPackage);
   } catch (err) {
     console.log(err);
-    res.send("failed to get-programId-by-sessionId");
+    // res.send("failed to get-programId-by-sessionId");
+    res.json({ message: "failed to get-programId-by-sessionId" });
   }
 });
 
@@ -1249,7 +1255,8 @@ app.get("/get-session-info/:programId", async (req, res) => {
     // res.json(result);
     res.json(filterInactiveSession); // 20241122 updated by Wilson
   } catch (err) {
-    res.send("failed to get fetch payment info with session id");
+    // res.send("failed to get fetch payment info with session id");
+    res.json({ message: "failed to get fetch payment info with session id" });
   }
 });
 
@@ -1289,10 +1296,12 @@ app.post("/update-program-info", async (req, res) => {
       }
     );
     console.log("updated program info", updateResult);
-    res.send("succeeded to update");
+    // res.send("succeeded to update");
+    res.json({ message: "succeeded to update" });
   } catch (err) {
     console.log(err);
-    res.send("failed to update");
+    // res.send("failed to update");
+    res.json({ message: "failed to update" });
   }
 });
 
@@ -1375,10 +1384,12 @@ app.post("/create-session-info", async (req, res) => {
       createdAt: new Date(),
     });
     // console.log("createSession", createSession);
-    res.send("Create session successfully");
+    // res.send("Create session successfully");
+    res.json({ message: "Create session successfully" });
   } catch (err) {
     console.log(err);
-    res.send("Create session failed");
+    // res.send("Create session failed");
+    res.json({ message: "Create session failed" });
   }
 });
 
@@ -2216,7 +2227,8 @@ app.post(
       console.log("groupedParticipant", groupedParticipant);
     } catch (err) {
       console.log(err);
-      res.send(err);
+      // res.send(err);
+      res.json({ message: err });
     }
   }
 );
